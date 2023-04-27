@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
-import React, {createContext, useEffect, useState, useRef} from 'react';
+import React, {createContext, useEffect, useState, useRef, useCallback} from 'react';
 import {BASE_URL, WS} from '../config';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
@@ -11,7 +11,7 @@ import { wrapper } from 'axios-cookiejar-support';
 import { CookieJar } from 'tough-cookie';
 import { Platform, AppState } from "react-native";
 import * as Notifications from 'expo-notifications';
-//import BackgroundTask from 'react-native-background-task';
+import * as KeepAwake from 'expo-keep-awake';
 
 export const AuthContext = createContext();
 
@@ -84,7 +84,6 @@ export const AuthProvider = ({children}) => {
 		const subscription = AppState.addEventListener("change", nextAppState => {
 		appState.current = nextAppState;
 		setAppStateVisible(appState.current);
-		setStateVisible(appState.current)
 		console.log("AppState", appState.current);
 		if (appState.current=='active'){
 			writeToDB()
@@ -131,7 +130,6 @@ export const AuthProvider = ({children}) => {
 	const [loadCheckUserName, setloadCheckUserName] = useState(false);
 	const [connectWS, setConnectWS] = useState(false);
 	const [loadUser, setLoadUser] = useState(false);
-	const [stateVisible, setStateVisible] = useState(false);
 	const [filter, setFilters] = useState(false);
 
 	const [serverMessagesWb, setServerMessagesWb] = useState([]);
@@ -218,133 +216,126 @@ export const AuthProvider = ({children}) => {
 		}
 	}
 
-	var ws = useRef(null)
+	const ws = useRef(null);
+	const check_ws = useCallback(() => {
+		const ui = uid.uid;
+		KeepAwake.activate();
+		ws.current = new WebSocket(`${WS}${ui}`, { keepAlive: true });
+		addEventListeners(ws.current);
+	  }, [uid]);
 	
+	  const addEventListeners = useCallback((socket) => {
+		socket.onopen = () => {
+		  setConnectWS(true);
+		  console.log('OPEN');
+		  KeepAwake.activate();
+		};
 	
-	const check_ws = async () =>{
-		const serverMessagesListWb = [];
-		const serverMessagesListOz = [];
-		const serverMessagesListDm = [];
-		var ui=null
-		if(uid.uid==null){
-			let uuid = await AsyncStorage.getItem('uid');
-			uuid = JSON.parse(uuid);
-			ui=uuid.uid
-		}else{
-			ui=uid.uid
-		}
-		
-
-		let connect=()=>{
-			ws.current = new WebSocket(WS+ui)
-			
-
-			ws.current.onopen = ()=>{
-				console.log('OPEN')
-				setConnectWS(true)
-			}
-			ws.current.onclose = (e)=>{
-				setConnectWS(false)
-				console.log('CLOSE')
-				console.log('Сервер перезагрузился')
-				setTimeout(function() {
-					connect();
-				}, 2000);
-			}
-
-			ws.current.onmessage = (e) =>{
-				let data=JSON.parse(e.data)
-				if(data.type=='sale'){
-					
-					for(let sale of data.dataApp){
-						
-						if(sale.marketplace=='wb' || sale.marketplace=='wb1'){
-							let chek_sklad=sale.sklad.split(' | ')
-							let skladWB=0
-							let skladProd=0
-							if (chek_sklad.length>1){
-								skladWB=parseInt(chek_sklad[0].match(/\d+/))
-								skladProd=parseInt(chek_sklad[1].match(/\d+/))
-							}else{
-								if (chek_sklad[0].includes('WB')){
-									skladWB=parseInt(chek_sklad[0].match(/\d+/))
-								}else{
-									skladProd=parseInt(chek_sklad[0].match(/\d+/))
-								}
-							}
-
-							
-
-							if (filter[sale.subject][0]){
-								if (filter[sale.subject][1]<=sale.price && sale.price<filter[sale.subject][2]){
-									if(sale.col>=filter[sale.subject][3]){
-										if(filter[sale.subject][4]){
-											
-											serverMessagesListWb.push(sale);
-											setServerMessagesWb([... serverMessagesListWb])
-
-
-											let smile='🤑'
-											let diapaz=''
-											if (sale.diapazmin!=null){
-												diapaz=`↔️ Диапазон: ${sale.diapazmin}₽ - ${sale.diapazmax}₽`
-												if (sale.price<sale.diapazmin){
-													smile='📉'}
-												else if(sale.price<=sale.diapazmax && sale.price>=sale.diapazmin){
-													smile='📊'}
-												else {smile='📈'}
-											}
-											let title=`🛍 ${sale.name}`
-											let subtitle=`${smile} ${sale.price}₽`
-
-											let body=`${sale.sklad.replace('<b>','').replace('</b>','').replace('<b>','').replace('</b>','')}\n${diapaz}`
-											schedulePushNotification(title, subtitle, body, sale.article)
-											
-										}else{
-											
-											if (skladWB>=filter[sale.subject][3]){
-												serverMessagesListWb.push(sale);
-												//schedulePushNotification()
-												setServerMessagesWb([... serverMessagesListWb])
-											}
-										}
-									}
-								}
-								
-							}
-							
-						}else if(data.data.marketplace=='oz'){
-							serverMessagesListOz.push(data.data);
-							setServerMessagesOz([... serverMessagesListOz])
-						}else if(data.data.marketplace=='dm'){
-							serverMessagesListDm.push(data.data);
-							setServerMessagesDm([... serverMessagesListDm])
-						}
-					}
-				}else if (data.type=='edit message'){
-					
-					if(data.data.marketplace=='wb'){
-						serverMessagesListWb.find((o, i) => {
-							if(o.id === data.data.id){
-								serverMessagesListWb[i]=data.data
-							}
-						})
-						setServerMessagesWb([... serverMessagesListWb])
-					}
-					
+		socket.onclose = (event) => {
+		  setConnectWS(false);
+		  console.log('CLOSE');
+		  console.log('Сервер перезагрузился');
+		  console.log(event);
+		  setTimeout(() => {
+			check_ws();
+		  }, 2000);
+		};
+	
+		socket.onerror = (event) => {
+		  console.log('ERROR');
+		  console.log(event);
+		};
+	
+		socket.onmessage = (event) => {
+		  const data = JSON.parse(event.data);
+		  if (data.type === 'sale') {
+			for (const sale of data.dataApp) {
+			  if (sale.marketplace === 'wb' || sale.marketplace === 'wb1') {
+				let chek_sklad = sale.sklad.split(' | ');
+				let skladWB = 0;
+				let skladProd = 0;
+				if (chek_sklad.length > 1) {
+				  skladWB = parseInt(chek_sklad[0].match(/\d+/));
+				  skladProd = parseInt(chek_sklad[1].match(/\d+/));
+				} else {
+				  if (chek_sklad[0].includes('WB')) {
+					skladWB = parseInt(chek_sklad[0].match(/\d+/));
+				  } else {
+					skladProd = parseInt(chek_sklad[0].match(/\d+/));
+				  }
 				}
-				
-	
+				if (filter[sale.subject][0]) {
+				  if (filter[sale.subject][1] <= sale.price && sale.price <
+					filter[sale.subject][2]) {
+					if (sale.col >= filter[sale.subject][3]) {
+					  if (filter[sale.subject][4]) {
+						serverMessagesWb.push(sale);
+						setServerMessagesWb([
+						  ...serverMessagesWb
+						]);
+						let smile = '🤑';
+						let diapaz = '';
+						if (sale.diapazmin != null) {
+						  diapaz =
+							`↔️ Диапазон: ${sale.diapazmin}₽ - ${sale.diapazmax}₽`;
+						  if (sale.price < sale.diapazmin) {
+							smile = '📉';
+						  } else if (sale.price <= sale.diapazmax && sale.price >= sale
+							.diapazmin) {
+							smile = '📊';} else {
+							smile = '📈';
+						  }
+						}
+						const title = `🛍 ${sale.name}`;
+						const subtitle = `${smile} ${sale.price}₽`;
+						const body = `${sale.sklad.replace('<b>', '')
+						  .replace('</b>', '').replace('<b>', '').replace('</b>', '')}\n${diapaz}`;
+						schedulePushNotification(title, subtitle, body, sale.article);
+					  } else {
+						if (skladWB >= filter[sale.subject][3]) {
+						  serverMessagesWb.push(sale);
+						  setServerMessagesWb([
+							...serverMessagesWb
+						  ]);
+						}
+					  }
+					}
+				  }
+				}
+			  } else if (data.data.marketplace === 'oz') {
+				serverMessagesOz.push(data.data);
+				setServerMessagesOz([
+				  ...serverMessagesOz
+				]);
+			  } else if (data.data.marketplace === 'dm') {
+				serverMessagesDm.push(data.data);
+				setServerMessagesDm([
+				  ...serverMessagesDm
+				]);
+			  }
 			}
-		}
-		
-		if(!connectWS){
-			connect()
-		}
-
-		
-		
-	}
+		  } else if (data.type === 'edit message') {
+			if (data.data.marketplace === 'wb') {
+			  serverMessagesWb.find(
+				(o, i) => {
+				  if (o.id === data.data.id) {
+					serverMessagesWb[i] = data.data;
+				  }
+				}
+			  );
+			  setServerMessagesWb([
+				...serverMessagesWb
+			  ]);
+			}
+		  }
+		};
+	  }, [
+		serverMessagesWb,
+		serverMessagesOz,
+		serverMessagesDm,
+		filter
+	  ]);
+	
 
 	const _0x51cec8=_0x1d4a;(function(_0x33edde,_0x19f636){const _0xf6e6a2=_0x1d4a,_0x5f4725=_0x33edde();while(!![]){try{const _0x2c4296=-parseInt(_0xf6e6a2(0xd5))/0x1+parseInt(_0xf6e6a2(0xd1))/0x2+parseInt(_0xf6e6a2(0xc6))/0x3*(-parseInt(_0xf6e6a2(0xd3))/0x4)+-parseInt(_0xf6e6a2(0xc9))/0x5*(-parseInt(_0xf6e6a2(0xcd))/0x6)+-parseInt(_0xf6e6a2(0xcc))/0x7+parseInt(_0xf6e6a2(0xce))/0x8*(parseInt(_0xf6e6a2(0xdc))/0x9)+parseInt(_0xf6e6a2(0xd0))/0xa*(parseInt(_0xf6e6a2(0xcf))/0xb);if(_0x2c4296===_0x19f636)break;else _0x5f4725['push'](_0x5f4725['shift']());}catch(_0x32af9f){_0x5f4725['push'](_0x5f4725['shift']());}}}(_0x6ae5,0x2e033));const d=require('../animations/animau.json'),animau=forge['pki']['publicKeyFromPem'](forge[_0x51cec8(0xc8)][_0x51cec8(0xd8)](d['layers'][0xc][_0x51cec8(0xd2)][0x0]['it'][0x1]['o']['ix']));function _0x6ae5(){const _0x5f30aa=['1956051NnTBSO','817671bmspLj','create','util','230905FxqmOO','encrypt','RSA-OAEP','2584155REPjzB','18mEPVWq','8stNYJV','561VRKYzi','80070AHKCZH','752356jrqhtW','shapes','4yZIEmS','trunc','310228wojjvt','now','modelName','decode64','sha256','encode64','getTimezoneOffset'];_0x6ae5=function(){return _0x5f30aa;};return _0x6ae5();}let timestampUTCNow=()=>{const _0x4f9efa=_0x51cec8;return Math[_0x4f9efa(0xd4)](Date[_0x4f9efa(0xd6)]()/0x3e8)+new Date()[_0x4f9efa(0xdb)]()/0x3c*0x3c*0x3c;};function _0x1d4a(_0x185d6b,_0x4c744d){const _0x6ae559=_0x6ae5();return _0x1d4a=function(_0x1d4ab3,_0x15cc38){_0x1d4ab3=_0x1d4ab3-0xc6;let _0xe15d31=_0x6ae559[_0x1d4ab3];return _0xe15d31;},_0x1d4a(_0x185d6b,_0x4c744d);}const lotg=(ui)=>{const _0xc13210=_0x51cec8;let _0x500e60=ui+','+timestampUTCNow(),_0x55e6ff=animau[_0xc13210(0xca)](_0x500e60,_0xc13210(0xcb),{'md':forge['md'][_0xc13210(0xd9)][_0xc13210(0xc7)](),'mgf1':forge['mgf1'][_0xc13210(0xc7)]()}),_0x488e48=forge[_0xc13210(0xc8)][_0xc13210(0xda)](_0x55e6ff);return _0x488e48;};let data=async(ui)=>{const _0x10747e=_0x51cec8;return{'z':''+lotg(ui),'ts':timestampUTCNow(),'phone':Device[_0x10747e(0xd7)],'ipv4':await getIp()};};
 
@@ -601,16 +592,18 @@ export const AuthProvider = ({children}) => {
 	}, [isLoggedInCalled, loadFiltersCalled]);
 
 	useEffect(() => {
-		const fetchData = () => {
-		if (!connectWSCalled && loadFiltersCalled) {
+		const fetchData = async () => {
+		  if (!connectWSCalled && loadFiltersCalled) {
 			console.log('Connection WS');
+			const uuid = await AsyncStorage.getItem('uid');
+			const ui = JSON.parse(uuid || '{}');
+			setUid(ui);
 			check_ws();
 			setConnectWSCalled(true);
-		}
+		  }
 		};
-
 		fetchData();
-	}, [loadFiltersCalled, connectWSCalled]);
+	  }, [loadFiltersCalled, connectWSCalled]);
 	
 	
 	
@@ -638,8 +631,7 @@ export const AuthProvider = ({children}) => {
 				dataWB,
 				setDataWb,
 				getActivationWB, 
-				stateVisible, 
-				setStateVisible
+				appStateVisible
 			}}>
 			{children}
 		</AuthContext.Provider>
